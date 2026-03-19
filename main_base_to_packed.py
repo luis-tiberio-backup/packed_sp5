@@ -66,6 +66,17 @@ def unzip_and_process_data(zip_path, extract_to_dir):
         
         df_selecionado.columns = ['Chave', 'Coluna9', 'Coluna15', 'Coluna17', 'Coluna2', 'Coluna23']
 
+        # =============================================
+        # >>> CORREÇÃO: Limpar a coluna Chave <<<
+        # Remove espaços, quebras de linha e padroniza tipo
+        # =============================================
+        df_selecionado['Chave'] = (
+            df_selecionado['Chave']
+            .astype(str)          # Garante que tudo é string
+            .str.strip()          # Remove espaços nas pontas
+            .str.replace(r'\s+', ' ', regex=True)  # Remove espaços duplos internos
+        )
+
         contagem = df_selecionado['Chave'].value_counts().reset_index()
         contagem.columns = ['Chave', 'Quantidade']
 
@@ -79,6 +90,11 @@ def unzip_and_process_data(zip_path, extract_to_dir):
 
         resultado = pd.merge(agrupado, contagem, on='Chave')
         resultado = resultado[['Chave', 'Coluna9', 'Coluna15', 'Coluna17', 'Quantidade', 'Coluna2', 'Coluna23']]
+        
+        # =============================================
+        # >>> SEGURANÇA EXTRA: Remove duplicatas restantes <<<
+        # =============================================
+        resultado = resultado.drop_duplicates(subset='Chave', keep='first')
         
         print(f"Processamento concluído. DataFrame final tem {len(resultado)} linhas.")
         shutil.rmtree(unzip_folder)
@@ -118,7 +134,7 @@ def update_google_sheet_with_dataframe(df_to_upload):
             print("❌ Erro de permissão! Verifique se o email do arquivo 'hxh.json' está compartilhado na planilha.")
             raise api_err
 
-        aba = planilha.worksheet("Packed")
+        aba = planilha.worksheet("Packed New")
         
         # 1. Limpar a aba
         print("Limpando a aba 'Packed'...")
