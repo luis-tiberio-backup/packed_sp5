@@ -50,15 +50,19 @@ def unzip_and_process_data(zip_path, extract_to_dir):
             return None
 
         print(f"Lendo e unificando {len(csv_files)} arquivos CSV...")
-        all_dfs = [pd.read_csv(file, encoding='utf-8') for file in csv_files]
+        
+        # =============================================
+        # FIX 1: Ler TUDO como string para evitar
+        # conflito de tipos entre CSVs diferentes
+        # =============================================
+        all_dfs = [pd.read_csv(file, encoding='utf-8', dtype=str) for file in csv_files]
         df_final = pd.concat(all_dfs, ignore_index=True)
 
-        # === INÍCIO DA LÓGICA DE PROCESSAMENTO ===
         print("Iniciando processamento dos dados...")
         
         print("Aplicando filtro: SoC_SP_Cravinhos...")
         if not df_final.empty:
-            df_final = df_final[df_final.iloc[:, 12] == "SoC_SP_Cravinhos"]
+            df_final = df_final[df_final.iloc[:, 12].str.strip() == "SoC_SP_Cravinhos"]
             print(f"Linhas restantes após filtro: {len(df_final)}")
 
         colunas_desejadas = [0, 9, 15, 17, 2, 23]
@@ -67,16 +71,38 @@ def unzip_and_process_data(zip_path, extract_to_dir):
         df_selecionado.columns = ['Chave', 'Coluna9', 'Coluna15', 'Coluna17', 'Coluna2', 'Coluna23']
 
         # =============================================
-        # >>> CORREÇÃO: Limpar a coluna Chave <<<
-        # Remove espaços, quebras de linha e padroniza tipo
+        # FIX 2: Limpeza agressiva da coluna Chave
         # =============================================
-        df_selecionado['Chave'] = (
-            df_selecionado['Chave']
-            .astype(str)          # Garante que tudo é string
-            .str.strip()          # Remove espaços nas pontas
-            .str.replace(r'\s+', ' ', regex=True)  # Remove espaços duplos internos
-        )
+        def limpar_chave(valor):
+            """Remove .0 de floats, espaços, e caracteres invisíveis"""
+            if pd.isna(valor):
+                return ''
+            s = str(valor).strip()
+            # Remove caracteres invisíveis (zero-width, BOM, etc)
+            s = ''.join(c for c in s if c.isprintable())
+            # Se termina em .0, .00, etc → converte pra inteiro
+            try:
+                f = float(s)
+                if f == int(f):
+                    return str(int(f))
+            except (ValueError, OverflowError):
+                pass
+            return s
 
+        df_selecionado['Chave'] = df_selecionado['Chave'].apply(limpar_chave)
+
+        # =============================================
+        # FIX 3: Remover linhas 100% duplicadas ANTES
+        # de contar (CSVs podem ter dados repetidos)
+        # =============================================
+        antes = len(df_selecionado)
+        df_selecionado = df_selecionado.drop_duplicates()
+        depois = len(df_selecionado)
+        print(f"Linhas duplicadas removidas: {antes - depois}")
+
+        # =============================================
+        # FIX 4: Contagem e agrupamento
+        # =============================================
         contagem = df_selecionado['Chave'].value_counts().reset_index()
         contagem.columns = ['Chave', 'Quantidade']
 
@@ -90,18 +116,29 @@ def unzip_and_process_data(zip_path, extract_to_dir):
 
         resultado = pd.merge(agrupado, contagem, on='Chave')
         resultado = resultado[['Chave', 'Coluna9', 'Coluna15', 'Coluna17', 'Quantidade', 'Coluna2', 'Coluna23']]
-        
+
         # =============================================
-        # >>> SEGURANÇA EXTRA: Remove duplicatas restantes <<<
+        # FIX 5: Garantia final - impossível ter duplicata
         # =============================================
         resultado = resultado.drop_duplicates(subset='Chave', keep='first')
-        
+
+        # =============================================
+        # DEBUG: Verificar se ainda há duplicatas
+        # =============================================
+        duplicatas = resultado[resultado['Chave'].duplicated(keep=False)]
+        if len(duplicatas) > 0:
+            print(f"⚠️ AINDA HÁ {len(duplicatas)} DUPLICATAS!")
+            print(duplicatas[['Chave']].head(20))
+        else:
+            print("✅ Nenhuma duplicata na coluna Chave.")
+
         print(f"Processamento concluído. DataFrame final tem {len(resultado)} linhas.")
         shutil.rmtree(unzip_folder)
         return resultado
         
     except Exception as e:
         print(f"Erro ao processar dados: {e}")
+        traceback.print_exc()
         return None
 
 def update_google_sheet_with_dataframe(df_to_upload):
